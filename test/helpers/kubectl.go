@@ -1880,32 +1880,44 @@ func (kub *Kubectl) WaitForCiliumInitContainerToFinish() error {
 	return WithTimeout(body, "Cilium Init Container was not able to initialize or had a successful run", &TimeoutConfig{Timeout: HelperTimeout})
 }
 
-// CiliumNodesWait waits until all nodes in the Kubernetes cluster are annotated
-// with Cilium annotations. Its runtime is bounded by a maximum of `HelperTimeout`.
-// When a node is annotated with said annotations, it indicates
-// that the tunnels in the nodes are set up and that cross-node traffic can be
-// tested. Returns an error if the timeout is exceeded for waiting for the nodes
-// to be annotated.
+// CiliumNodesWait waits until all nodes in the Kubernetes cluster have a
+// matching CiliumNode resource with a populated PodCIDRs field. Its runtime is
+// bounded by a maximum of `HelperTimeout`. When a CiliumNode appears, it
+// indicates that the tunnels in the nodes are set up and that cross-node
+// traffic can be tested. Returns an error if the timeout is exceeded.
 func (kub *Kubectl) CiliumNodesWait() (bool, error) {
 	body := func() bool {
-		filter := `{range .items[*]}{@.metadata.name}{"="}{@.metadata.annotations.io\.cilium\.network\.ipv4-pod-cidr}{"\n"}{end}`
-		data := kub.ExecShort(fmt.Sprintf(
-			"%s get nodes -o jsonpath='%s'", KubectlCmd, filter))
+		// Get all Kubernetes nodes
+		filter := `{range .items[*]}{@.metadata.name}{"="}{"\n"}{end}`
+		data := kub.ExecShort(fmt.Sprintf("%s get nodes -o jsonpath='%s'", KubectlCmd, filter))
 		if !data.WasSuccessful() {
 			return false
 		}
-		result := data.KVOutput()
-		ignoreNode := GetNodeWithoutCilium()
-		for k, v := range result {
-			if k == ignoreNode {
-				continue
-			}
+		k8sNodes := data.KVOutput()
+		// Remove the node on which Cilium is *not* running
+		delete(k8sNodes, GetNodeWithoutCilium())
+
+		// Get all CiliumNode resources
+		filter = `{range .items[*]}{@.metadata.name}{"="}{@.spec.ipam.podCIDRs}{"\n"}{end}`
+		data = kub.ExecShort(fmt.Sprintf("%s get ciliumnodes -o jsonpath='%s'", KubectlCmd, filter))
+		if !data.WasSuccessful() {
+			return false
+		}
+		ciliumNodes := data.KVOutput()
+		for k, v := range ciliumNodes {
 			if v == "" {
-				kub.Logger().Infof("Kubernetes node '%v' does not have Cilium metadata", k)
+				kub.Logger().Infof("CiliumNode '%v' does not have spec.ipam.podCIDRs set", k)
 				return false
 			}
-			kub.Logger().Infof("Kubernetes node '%v' IPv4 address: '%v'", k, v)
+			delete(k8sNodes, k)
+			kub.Logger().Infof("CiliumNode '%v' PodCIDRs: '%v'", k, v)
 		}
+
+		if len(k8sNodes) > 0 {
+			kub.Logger().Infof("Some Kubernetes nodes do not have a matching CiliumNode yet: %v", k8sNodes)
+			return false
+		}
+
 		return true
 	}
 	err := WithTimeout(body, "Kubernetes node does not have cilium metadata", &TimeoutConfig{Timeout: HelperTimeout})
