@@ -327,6 +327,9 @@ Deprecated options
   assets not being compiled into the cilium-agent binary anymore. The option is
   deprecated and will be removed in Cilium 1.9.
 
+* ``accesslog``: L7 access logs have been available since Cilium 1.6. The
+  ``accesslog`` option to log to a file has been removed.
+
 Deprecated cilium-operator options
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
